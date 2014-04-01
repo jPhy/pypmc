@@ -15,6 +15,7 @@ from ..tools._regularize import regularize
 
 cimport numpy as _np
 from libc.math cimport exp, log
+from pypmc.tools._linalg cimport bilinear_sym
 
 DTYPE = _np.float64
 ctypedef double DTYPE_t
@@ -663,18 +664,17 @@ class GaussianInference(object):
         # (10.64)
 
         cdef:
-            DTYPE_t [:] tmp  = _np.zeros_like(self.data[0], dtype=DTYPE)
+            _np.ndarray[DTYPE_t, ndim=1] tmp  = _np.zeros_like(self.data[0], dtype=DTYPE)
             DTYPE_t [:] beta = self.beta
             DTYPE_t [:,:] data  =  self.data
             DTYPE_t [:,:] m  =  self.m
             DTYPE_t [:] nu  =  self.nu
             DTYPE_t [:,:] expectation_gauss_exponent = self.expectation_gauss_exponent
-            DTYPE_t [:,:] W = _np.empty_like(self.W[0])
+            _np.ndarray[DTYPE_t, ndim=2] W = _np.empty_like(self.W[0])
             size_t K = self.K
             size_t N = len(expectation_gauss_exponent)
             size_t dim = self.dim
             size_t k,n,i,j
-            DTYPE_t chi2
 
         for k in range(K):
             W = self.W[k]
@@ -682,16 +682,7 @@ class GaussianInference(object):
                 for i in range(dim):
                     tmp[i] = data[n,i] - m[k,i]
 
-                # compute bilinear form with symmetric matrix by hand
-                # SIMD-amenable
-                chi2 = 0.
-                for i in range(dim):
-                    # diagonal contribution
-                    chi2 += tmp[i] * tmp[i] * W[i,i]
-                    # off-diagonal elements come twice
-                    for j in range(i):
-                        chi2 += 2. * tmp[i] * tmp[j] * W[i,j]
-                expectation_gauss_exponent[n,k] = dim / beta[k] + nu[k] * chi2
+                expectation_gauss_exponent[n,k] = dim / beta[k] + nu[k] * bilinear_sym(W, tmp)
 
     def _update_expectation_ln_pi(self):
         # (10.66)
