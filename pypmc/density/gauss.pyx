@@ -4,6 +4,10 @@ import numpy as _np
 from .base import ProbabilityDensity, LocalDensity
 from ..tools._doc import _inherit_docstring, _add_to_docstring
 
+from pypmc.tools._linalg cimport bilinear_sym
+from libc.math cimport exp, log
+cimport numpy as _np
+
 class LocalGauss(LocalDensity):
     """A multivariate local Gaussian density with redefinable covariance.
 
@@ -12,11 +16,19 @@ class LocalGauss(LocalDensity):
          Matrix-like array; covariance-matrix.
 
     """
+
     symmetric = True
+#     cdef:
+#         readonly bint symmetric
+#         readonly double log_normalization, det_sigma
+#         readonly size_t dim
+#         readonly _np.ndarray sigma, inv_sigma, cholesky_sigma, _tmp
+
     def __init__(self, sigma):
         self.update(sigma)
+        self._tmp = _np.empty(self.dim)
 
-    def update(self, sigma):
+    def update(self, _np.ndarray[double, ndim=2] sigma):
         """Re-initilize the proposal with a new covariance matrix.
 
         :param sigma:
@@ -42,26 +54,32 @@ class LocalGauss(LocalDensity):
         self.det_sigma      = _np.linalg.det(self.sigma)
         self._compute_norm()
 
-
+#    cdef _np.ndarray[double, ndim=1] _get_gauss_sample(self, rng):
     def _get_gauss_sample(self, rng):
         """transform sample from standard gauss to Gauss(mean=0, sigma=sigma)"""
-        return _np.dot(self.cholesky_sigma,rng.normal(0,1,self.dim))
+        return _np.dot(self.cholesky_sigma, rng.normal(0,1,self.dim))
 
     def _compute_norm(self):
         'Compute the normalization'
-        self.log_normalization = -.5 * self.dim * _np.log(2 * _np.pi) - .5 * _np.log(self.det_sigma)
+        self.log_normalization = -.5 * self.dim * log(2 * _np.pi) - .5 * log(self.det_sigma)
 
     @_inherit_docstring(LocalDensity)
-    def evaluate(self, x , y):
-        return self.log_normalization - .5 * _np.dot(_np.dot(x-y, self.inv_sigma), x-y)
+    def evaluate(self, _np.ndarray[double, ndim=1] x, _np.ndarray[double, ndim=1] y):
+#        return self.log_normalization - .5 * _np.dot(_np.dot(x-y, self.inv_sigma), x-y)
+        cdef:
+            double[:] tmp = self._tmp
+            size_t i
+        for i in range(self.dim):
+            tmp[i] = x[i] - y[i]
+        return self.log_normalization - .5 * bilinear_sym(self.inv_sigma, self._tmp)
+#        return self.log_normalization - .5 * bilinear_sym(self.inv_sigma, x - y)
 
     @_add_to_docstring('''    .. important::\n
                 ``rng`` must return a numpy array of N samples from:\n
                 - **rng.normal(0,1,N)**: standard gaussian distribution\n''')
     @_inherit_docstring(LocalDensity)
-    def propose(self, y, rng = _np.random.mtrand):
+    def propose(self, _np.ndarray[double, ndim=1] y, rng = _np.random.mtrand):
         return y + self._get_gauss_sample(rng)
-
 
 class Gauss(ProbabilityDensity):
     r"""A Gaussian probability density. Can be used as component for
@@ -105,7 +123,27 @@ class Gauss(ProbabilityDensity):
 
     @_inherit_docstring(ProbabilityDensity)
     def evaluate(self, x):
-        return self._local_gauss.evaluate(x,self.mu)
+        return self._local_gauss.log_normalization - .5 * bilinear_sym(self.inv_sigma, x - self.mu)
+
+    def multi_evaluate(self, _np.ndarray[double, ndim=2] x not None, _np.ndarray[double, ndim=1] out not None):
+        '''Evaluate density at all points in ``x`` and return in ``out``.'''
+        assert len(x) == len(out)
+
+        cdef:
+            double [:] mu = self.mu
+            double log_normalization = self._local_gauss.log_normalization
+
+            _np.ndarray[double, ndim=1] diff = _np.empty_like(x[0])
+            _np.ndarray[double, ndim=2] inv_sigma = self.inv_sigma
+
+            size_t i,n
+
+        for n in range(len(x)):
+            # compute difference
+            for i in range(len(diff)):
+                diff[i] = x[n,i] - mu[i]
+
+            out[n] = log_normalization - 0.5 * bilinear_sym(inv_sigma, diff)
 
     @_add_to_docstring("""    .. important::\n
                 ``rng`` must meet the requirements of

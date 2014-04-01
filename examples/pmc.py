@@ -7,6 +7,8 @@ from __future__ import print_function
 import numpy as np
 import pypmc
 
+np.random.seed(1346143)
+
 
 # define the target; i.e., the function you want to sample from.
 # In this case, it is a bimodal Gaussian
@@ -63,7 +65,7 @@ for i in range(10):
     print("\rstep", i, "...\n\t", end='')
 
     # draw 1,000 samples and save the generating component
-    generating_components.append(sampler.run(10**3, trace_sort=True))
+    generating_components.append(sampler.run(10**4, trace_sort=True))
 
     # get a reference to the weights and samples that have just been generated
     weighted_samples = sampler.history[-1]
@@ -71,7 +73,7 @@ for i in range(10):
     samples = weighted_samples[:,1:]
 
     # update the proposal using the pmc algorithm in the non Rao-Blackwellized form
-    pypmc.mix_adapt.pmc.gaussian_pmc(samples, sampler.proposal, weights, generating_components[-1], mincount=20, rb=False, copy=False)
+    pypmc.mix_adapt.pmc.gaussian_pmc(samples, sampler.proposal, weights, generating_components[-1], mincount=20, rb=True, copy=False)
 
 print("\rsampling finished")
 print(  '-----------------')
@@ -130,3 +132,4 @@ plt.hist2d(sampler.history[-1][:,1], sampler.history[-1][:,2], weights=sampler.h
 set_axlimits()
 
 plt.show()
+plt.savefig('/tmp/harr.pdf')

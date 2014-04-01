@@ -93,6 +93,17 @@ class TestLocalGauss(unittest.TestCase):
         self.assertAlmostEqual(var1 , target_var1 , delta=delta_var1)
 
 class TestGauss(unittest.TestCase):
+
+    sigma = np.array([[0.01 , 0.003 ]
+                     ,[0.003, 0.0025]])
+
+    mean  = np.array([4.3 , 1.1])
+    point = np.array([4.35, 1.2])
+
+    target = 1.30077135
+
+    comp = Gauss(mean, sigma=sigma)
+
     def setUp(self):
         print('"Gauss" needs .LocalGauss.')
         print('When this test fails, first make sure that .LocalGauss works.')
@@ -103,19 +114,17 @@ class TestGauss(unittest.TestCase):
         self.assertRaisesRegexp(AssertionError, 'Dimensions of mean \(2\) and covariance matrix \(3\) do not match!', Gauss, mu, sigma)
 
     def test_evaluate(self):
-        sigma = np.array([[0.01 , 0.003 ]
-                         ,[0.003, 0.0025]])
 
-        delta = 1e-8
+        self.assertAlmostEqual(self.comp.evaluate(self.point), self.target)
 
-        mean  = np.array([4.3 , 1.1])
-        point = np.array([4.35, 1.2])
+    def test_multi_evaluate(self):
 
-        comp = Gauss(mean, sigma=sigma)
+        samples = np.array([self.point] * 2)
+        target  = np.array([self.target] * 2)
 
-        target = 1.30077135
-
-        self.assertAlmostEqual(comp.evaluate(point), target, delta=delta)
+        res = np.empty(2)
+        self.comp.multi_evaluate(samples, res)
+        np.testing.assert_array_almost_equal(res, target)
 
     def test_propose(self):
         mean           = np.array([-3.   ,+3.    ])

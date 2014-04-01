@@ -5,7 +5,8 @@ from copy import deepcopy as _deepcopy
 from .base import ProbabilityDensity
 from .gauss import Gauss
 from ..tools._doc import _inherit_docstring, _add_to_docstring
-from ..tools._regularize import logsumexp as _lse
+
+from pypmc.tools._regularize import logsumexp, logsumexp2D
 
 _msg_expect_normalized_weights = \
     """.. important::
@@ -102,11 +103,42 @@ class MixtureDensity(ProbabilityDensity):
         for i,comp in enumerate(self.components):
             components_evaluated[i] = comp.evaluate(x)
         # avoid direct exponentiation --> use scipy.misc.logsumexp (_lse)
-        res =  _lse(a=components_evaluated, b=self.weights)
+        res = logsumexp(components_evaluated, self.weights)
         if individual:
             return res, components_evaluated
         else:
             return res
+
+#     def multi_evaluate(self, _np.ndarray[double, ndim=2, mode="c"] x not None, _np.ndarray[double, ndim=2] individual not None):
+#
+#         assert len(x) == len(individual)
+#         assert individual.shape[1] == len(self)
+#         assert x.shape[1] == self.dim
+#
+#         cdef size_t k
+#
+#         for k in range(len(individual)):
+#             self.components[k].multi_evaluate(x, individual[:,k])
+
+    def multi_evaluate(self, x, individual):
+        '''Evaluate density at all points in ``x`` for all components and return in ``individual``.
+
+        :param x:
+            (N x D) array; one D-dim. sample per row.
+
+        :param individual:
+            (N x K) array; density of k-th component at the n-th sample.
+
+        '''
+
+        assert len(x) == len(individual)
+        assert individual.shape[1] == len(self)
+        assert x.shape[1] == self.dim
+
+        for k, c in enumerate(self.components):
+            c.multi_evaluate(x, individual[:,k])
+
+        return logsumexp2D(individual, self.weights)
 
     @_add_to_docstring(_msg_expect_normalized_weights)
     @_add_to_docstring(""":param shuffle:\n

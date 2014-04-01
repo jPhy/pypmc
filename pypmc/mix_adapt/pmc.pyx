@@ -10,6 +10,9 @@ from math import exp as _exp
 from copy import deepcopy as _cp
 from ..tools._regularize import regularize
 
+from libc.math cimport exp, log
+cimport numpy as _np
+
 def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=0, copy=True):
     '''Adapt a mixture ``density`` using the (M-)PMC algorithm according
     to [Cap+08]_.
@@ -72,17 +75,28 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
         density = _cp(density)
 
     def calculate_rho_rb():
-        rho = _np.zeros(( len(samples),len(density.components) ))
-        for k in live_components:
-            for n, sample in enumerate(samples):
-                rho[n, k]  = _exp(density.components[k].evaluate(sample)) * density.weights[k]
+        cdef:
+            size_t n, k,l
+            double tiny = _np.finfo('d').tiny
+            _np.ndarray[double, ndim=2] rho = _np.empty(( len(samples),len(density.components) ))
+            _np.int_t [:] live_components = _live_components
+
+        # TODO use only live components
+        # compute individual density -> rho
+        # normalized sum in densities
+        densities = density.multi_evaluate(samples, rho)
+
+        for l in range(len(live_components)):
+            k = live_components[l]
+            for n in range(len(samples)):
+                rho[n, k]  = exp(rho[n,k]) * density.weights[k]
                 # + "tiny" --> avoid division by zero
-                rho[n, k] /= _exp(density.evaluate(sample)) + _np.finfo('d').tiny
+                rho[n, k] /= exp(densities[n]) + tiny
         return rho
 
     def calculate_rho_non_rb():
         rho = _np.zeros(( len(samples),len(density.components) ))
-        for k in live_components:
+        for k in _live_components:
             rho[latent==k,k] = 1.
         return rho
 
@@ -100,10 +114,11 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
             raise ValueError('`rb` must be True if `latent` is not provided!')
 
         # set up list of live_components
-        live_components = []
+        _live_components = []
         for k in range(len(density)):
             if density.weights[k] != 0:
-                live_components.append(k)
+                _live_components.append(k)
+        _live_components = _np.array(_live_components, dtype=_np.int)
 
         rho = calculate_rho_rb()
 
@@ -112,12 +127,13 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
         count = _np.histogram(latent, bins=len(density.components), range=(0,len(density.components)))[0]
 
         # set up list of live_components
-        live_components = []
+        _live_components = []
         for k in range(len(density)):
             if (density.weights[k] == 0.) or (count[k] < mincount):
                 # components with weight zero or less than ``mincount`` samples are not alive
                 continue
-            live_components.append(k)
+            _live_components.append(k)
+        _live_components = _np.array(_live_components, dtype=_np.int)
 
         if rb:
             rho = calculate_rho_rb()
@@ -150,7 +166,7 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
         mu = _np.einsum('ki,k->ki', mu, inv_alpha)
 
         # new covars
-        for k in live_components:
+        for k in _live_components:
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
             _np.einsum('n,n,ni,nj->ij', normalized_weights, rho[:,k], x_minus_mu, x_minus_mu, out=cov[k])
@@ -167,7 +183,7 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
         mu = _np.einsum('ki,k->ki', mu, inv_alpha)
 
         # new covars
-        for k in live_components:
+        for k in _live_components:
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
             _np.einsum('n,ni,nj->ij', rho[:,k], x_minus_mu, x_minus_mu, out=cov[k])
@@ -178,7 +194,7 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
     # ----------------------------------------------------------------------------
 
     # apply the updated mixture weights, means and covariances
-    for k in live_components:
+    for k in _live_components:
         component = density.components[k]
         density.weights[k] = alpha[k]
         # if matrix is not positive definite, the update will fail
@@ -188,6 +204,7 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
         try:
             component.update(mu[k], cov[k])
         except _np.linalg.LinAlgError:
+            print(rho[0,k])
             print("Could not update component %i --> weight is set to zero." %k)
             component.update(old_mu, old_sigma)
             density.weights[k] = 0.

@@ -17,14 +17,27 @@ class DummyComponent(ProbabilityDensity):
         self.to_propose = np.array(propose)
         self.dim = len(self.to_propose)
         self.eval_to = eval_to
+
     def evaluate(self, x):
         return self.eval_to
+
+    def multi_evaluate(self, x, out):
+        out[:] = self.eval_to
+
     def propose(self, N=1):
         return np.array([self.to_propose for i in range(N)])
 
 class TestMixtureDensity(unittest.TestCase):
     ncomp          = 5
     components     = [DummyComponent   for i in range(ncomp)]
+
+    proposals   = (DummyComponent(eval_to=10.),DummyComponent())
+    weights     = (.9,.1)
+    evaluate_at = np.array( (-5.,) )
+
+    target = 39.69741490700607
+
+    mix = MixtureDensity(proposals, weights)
 
     def test_dimcheck(self):
         # dimensions of all components have to match
@@ -66,15 +79,19 @@ class TestMixtureDensity(unittest.TestCase):
         self.assertTrue(mix.normalized())
 
     def test_evaluate(self):
-        proposals   = (DummyComponent(eval_to=10.),DummyComponent())
-        weights     = (.9,.1)
-        evaluate_at = np.array( (-5.,) )
 
-        target = 39.69741490700607
+        self.assertAlmostEqual(self.target, self.mix.evaluate(self.evaluate_at))
 
-        mix = MixtureDensity(proposals, weights)
+    def test_multi_evaluate(self):
 
-        self.assertAlmostEqual(target,mix.evaluate(evaluate_at))
+        samples = np.array([self.evaluate_at] * 2)
+        targets = np.array([self.target] * 2)
+        individual = np.zeros((2,2))
+        res = self.mix.multi_evaluate(samples, individual)
+
+        np.testing.assert_array_almost_equal(res, targets)
+        np.testing.assert_array_almost_equal(individual[:,0], 10.)
+        np.testing.assert_array_almost_equal(individual[:,1], 42.)
 
     def test_propose(self):
         np.random.seed(rng_seed)
