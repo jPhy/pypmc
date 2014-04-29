@@ -6,7 +6,6 @@ from .pmc import *
 from .. import density
 import numpy as np
 import unittest
-#TODO: compare with pmclib (Kilbinger et. al.)
 
 class TestPMCNoOverlap(unittest.TestCase):
     # proposal density
