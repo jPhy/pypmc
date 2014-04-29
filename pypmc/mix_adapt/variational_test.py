@@ -193,7 +193,6 @@ class TestGaussianInference(unittest.TestCase):
                               [-2., -7.]])
 
         target_means   = [np.array([0.,5.]), np.array([0., -5.])]
-        target_covars  = [np.array([[2.5,0.75],[0.75,2.5]]), 2.5*np.ones((2,2))]
         target_weights = np.array([0.5,0.5])
 
         # provide hint for means to force convergence to a specific solution
@@ -274,6 +273,14 @@ class TestGaussianInference(unittest.TestCase):
                 np.outer(x_mean_comp[0], x_mean_comp[0])
         W     = np.linalg.inv(inv_W)
         np.testing.assert_allclose(infer.W[0], W)
+
+        infer.run()
+        mix = infer.make_mixture()
+        print('mixture')
+        print(infer.W[1])
+        print(np.linalg.cholesky(np.linalg.inv(infer.W[1])))
+        print(recover_gaussian_mixture(mix))
+        assert False
 
     @attr('slow')
     def test_weighted(self):

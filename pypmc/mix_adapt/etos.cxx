@@ -32,6 +32,8 @@
 
 #define USE_ROBUST 1
 
+#define USE_FIND_ROOT 1
+
 extern "C" {
 
 #define DPOTRF_F77 F77_FUNC(dpotrf, DPOTRF)
@@ -176,6 +178,14 @@ namespace etos
       return score;
    }
 
+   /**
+    * Perform m step for components individually and
+    * remove a component if its Cholesky decomposition fails.
+    * @param c
+    * @param x
+    * @param p
+    * @param beta
+    */
    template <typename T, typename X, typename P>
    void
    exec_m_step(std::vector<T*>& c, X const& x, P const& p, double beta)
@@ -252,46 +262,6 @@ namespace etos
       }
    }
 
-   /*
-    * embase
-    */
-   class embase
-   {
-   public:
-      embase(double const* x, int num, int dim);
-
-      int n_data() const;
-      int dim() const;
-      double const* operator[](int n) const;
-
-   protected:
-      double const* x_;
-      int num_;
-      int dim_;
-   };
-
-   inline int
-   embase::n_data() const
-   {
-      return num_;
-   }
-
-   inline int
-   embase::dim() const
-   {
-      return dim_;
-   }
-
-   inline double const*
-   embase::operator[](int k) const
-   {
-      return &x_[k * dim_];
-   }
-
-   embase::embase(double const* x, int num, int dim) :
-      x_(x), num_(num), dim_(dim)
-   {
-   }
 
    /*
     * lmatrix
@@ -406,34 +376,82 @@ namespace etos
       return inverse(imat);
    }
 
-   /*
+   /**
+    * embase
+    */
+   class embase
+   {
+   public:
+      embase(double const* x, int num, int dim);
+
+      int n_data() const;
+      int dim() const;
+      double const* operator[](int n) const;
+
+   protected:
+      /// data matrix num_ x dim_
+      double const* x_;
+      int num_;
+      int dim_;
+   };
+
+   inline int
+   embase::n_data() const
+   {
+      return num_;
+   }
+
+   inline int
+   embase::dim() const
+   {
+      return dim_;
+   }
+
+   inline double const*
+   embase::operator[](int n) const
+   {
+      return &x_[n * dim_];
+   }
+
+   embase::embase(double const* x, int num, int dim) :
+      x_(x), num_(num), dim_(dim)
+   {
+   }
+
+   /**
     * robust_vb
+    * todo prior for individual components including mu
+    * todo removing comp. with negative contribution to F:
+    *      - are samples redistributed to other components?
+    *      - why is negative bad?
+    *      - why only smallest removed?
+    * todo
     */
    class robust_vb : public embase
    {
    public:
-      /*
+      /**
        * Parameters of the variational Bayes approximating
        * distribution for a single component.
        */
       struct param_t
       {
-         // Dirichlet
+         /// Dirichlet
          double kappa_;
 
-         // inverse Wishart scale parameter
+         /// inverse Wishart dof parameter
          double gamma_;
 
-         // precision-scale parameter in the normal distribution
+         /// precision-scale parameter in the normal distribution
          double eta_;
 
-         // exponential scale
+         /// exponential scale
          double xi_;
 
-         // normal mean
+         /// normal mean
          std::vector<double> mu_;
 
-         // normal covariance
+         /// normal covariance
          lmatrix<double> sigma_;
       };
 
@@ -441,22 +459,22 @@ namespace etos
 
       struct cluster_t : param_t
       {
-         // bidirection cluster identification
+         /// bidirection cluster identification
          int id_;
 
-         // used in E step, what does it mean??
+         /// used in E step, what does it mean??
          double p0_;
 
-         // latent variables
+         /// latent variables
          std::vector<double> p_;
          std::vector<double> u_;
          std::vector<double> v_;
          std::vector<double> z_;
 
-         // Cholesky decomp
+         /// Cholesky decomp
          lmatrix<double> l_;
 
-         // inverse
+         /// inverse
          lmatrix<double> inv_;
 
          double score_;
@@ -470,8 +488,24 @@ namespace etos
          bool m_step(embase const& x, prior_t const& prior, double beta);
       };
 
+      /**
+       * Ctor.
+       *
+       * @param x Samples in num x dim matrix.
+       * @param num Number of samples.
+       * @param dim Dimension of each sample.
+       */
       robust_vb(double const* x, int num, int dim);
 
+      /**
+       * Set prior values, identical for all components.
+       *
+       * @param kappa Dirichlet
+       * @param gamma Wishard dof
+       * @param eta scale of precision matrix in normal
+       * @param nu student's t dof
+       * @param sigma std. dev on diagonal. Use 1.0 for unit matrix.
+       */
       void set_param(double kappa, double gamma, double eta,
                      double nu, double sigma);
 
@@ -481,8 +515,29 @@ namespace etos
       // void load_model(std::istream& stream);
       // void save_model(std::ostream& stream) const;
 
+      /**
+       * Load student's t mixture density
+       *
+       * @param n_clusters
+       * @param id
+       * @param kappa
+       * @param gamma
+       * @param eta
+       * @param xi
+       * @param mu
+       * @param sigma covariance matrix stored as lower triangular matrix.
+       *              cov[0,0] at sigma[0], cov[1,0] is at sigma[1], cov[1,1] at sigma[2] ...
+       */
+       void load_model(int n_clusters, std::vector<int> id,
+                       std::vector<double> kappa, std::vector<double> gamma,
+                       std::vector<double> eta, std::vector<double> xi,
+                       std::vector<std::vector<double>> mu, std::vector<std::vector<double>> sigma);
+       void save_model(std::ostream& stream) const;
+
       void remove_cluster(int k);
-      void split_cluster(int k);
+
+      // only used for multimodality
+//      void split_cluster(int k);
 
       double e_step(double beta = 1.0);
 
@@ -585,32 +640,99 @@ namespace etos
    }
 
    void
+   robust_vb::load_model(int n_clusters, std::vector<int> id,
+         std::vector<double> kappa, std::vector<double> gamma,
+         std::vector<double> eta, std::vector<double> xi,
+         std::vector<std::vector<double>> mu, std::vector<std::vector<double>> sigma)
+   {
+      // todo check dim, vector lengths
+      if (n_clusters > int(cdata_.size())) {
+         cdata_.resize(n_clusters);
+      }
+      clusters_.resize(n_clusters);
+      for (int k(0); k < n_clusters; ++k) {
+         clusters_[k] = &cdata_[k];
+         cluster_t& c(*clusters_[k]);
+         c.id_ = id[k]; c.kappa_ = kappa[k]; c.gamma_ = gamma[k]; c.eta_ = eta[k], c.xi_ = xi[k];
+         c.mu_.resize(dim());
+         // todo size check
+         std::copy(mu[k].begin(), mu[k].end(), c.mu_.begin());
+         c.sigma_.resize(dim());
+         // todo size check
+         for (int i(0); i < dim(); ++i) {
+           for (int j(0); j <= i; ++j) {
+              // lower diagonal matrix stored such that
+              // first element in row at sum of previous elements
+              // + offset: i(i+1)/2 + j
+              c.sigma_[i][j] = sigma[k][i * (i + 1) / 2 + j];
+           }
+         }
+
+         c.p_.resize(n_data());
+         c.u_.resize(n_data());
+         c.v_.resize(n_data());
+         c.z_.resize(n_data());
+         c.l_.resize(dim());
+         c.inv_.resize(dim());
+         if (cholesky(c.sigma_, c.l_) != 0) {
+            std::ostringstream stream;
+            stream << "invalid load: " << c.id_ << '\n';
+            throw std::runtime_error(stream.str());
+         }
+      }
+   }
+
+   void
+   robust_vb::save_model(std::ostream& stream) const
+   {
+     stream << n_clusters() << " components\n";
+     for (int k(0); k < n_clusters(); ++k) {
+       cluster_t const& c(*clusters_[k]);
+       stream << "component " << c.id_ << '\n';
+       const double nu = calc_nu_peak(c.xi_);
+       stream << "kappa\tgamma\teta\tnu\n";
+       stream << c.kappa_ << ' '
+         << c.gamma_ << ' ' << c.eta_ << ' ' << nu << '\n';
+       stream << "mu\n";
+       for (int i(0); i < dim(); ++i) {
+         stream << c.mu_[i] << (i + 1 == dim() ? '\n' : ' ');
+       }
+       stream << "sigma\n";
+       for (int i(0); i < dim(); ++i) {
+          for (int j(0); j <= i; ++j) {
+             // rescale for parameters at mode
+             stream << c.sigma_[i][j] << (j == i ? '\n' : ' ');
+
+         }
+       }
+       stream << "weights\n";
+       // compute covariance at mode
+//       lmatrix<double> cov(c.sigma_);
+
+       // inverse expects Cholesky factor, so only need
+       // lower triangular matrix. Since we rescale to get the mode
+       // the Cholesky root is multiplied by the sqrt(...)
+//       const double scale = std::sqrt(c.gamma_ - dim());
+//       for (int i(0); i < dim(); ++i) {
+//         for (int j(0); j <= i; ++j) {
+//            cov[i][j] *= scale;
+//         }
+//       }
+//       inverse(cov);
+//       stream << "cov\n";
+//       for (int i(0); i < dim(); ++i) {
+//         for (int j(0); j <= i; ++j) {
+//           stream << cov[i][j] << (j == i ? '\n' : ' ');
+//         }
+//       }
+     }
+   }
+
+   void
    robust_vb::remove_cluster(int k)
    {
       std::swap(clusters_[k], clusters_.back());
       clusters_.resize(clusters_.size() - 1);
-   }
-
-   void
-   robust_vb::split_cluster(int k)
-   {
-      int const old_size(clusters_.size());
-      std::vector<cluster_t> cdata(old_size + 1);
-      for (int i(0); i < old_size; ++i) {
-         cdata[i] = *clusters_[i];
-         cdata[i].id_ = i;
-      }
-      cdata[k].kappa_ /= 2.0;
-      cdata[old_size] = *clusters_[k];
-      cdata[old_size].id_ = old_size;
-      double const diff(0.1 * std::sqrt(cdata[k].sigma_[0][0]));
-      cdata[k].mu_[0] -= diff;
-      cdata[old_size].mu_[0] += diff;
-      cdata.swap(cdata_);
-      clusters_.resize(old_size + 1);
-      for (int i(0); i <= old_size; ++i) {
-         clusters_[i] = &cdata_[i];
-      }
    }
 
    double
@@ -651,18 +773,18 @@ namespace etos
    robust_vb::e_step(double beta)
    {
       double score(e_step_(beta));
-      double min_score(0.0);
-      int min_k(-1);
-      for (int k(0); k < n_clusters(); ++k) {
-         if (clusters_[k]->score_ < min_score) {
-            min_score = clusters_[k]->score_;
-            min_k = k;
-         }
-      }
-      if (min_k != -1) {
-         remove_cluster(min_k);
-         score = e_step_(beta);
-      }
+//      double min_score(0.0);
+//      int min_k(-1);
+//      for (int k(0); k < n_clusters(); ++k) {
+//         if (clusters_[k]->score_ < min_score) {
+//            min_score = clusters_[k]->score_;
+//            min_k = k;
+//         }
+//      }
+//      if (min_k != -1) {
+//         remove_cluster(min_k);
+//         score = e_step_(beta);
+//      }
       return score;
    }
 
@@ -919,6 +1041,8 @@ namespace etos
       log << "START " << alg.n_clusters() << '\n';
       int n(0);
       double score(-std::numeric_limits<double>::max());
+
+      /* annealing */
       for (double temp(temp0); temp > 1.0; ++n) {
          double const beta(1.0 / temp);
          double const newscore(alg.e_step(beta));
@@ -941,8 +1065,11 @@ namespace etos
             throw std::runtime_error("cluster number is zero");
          }
       }
+
+      /* regular EM steps */
       for (;; ++n) {
          double const newscore(alg.e_step());
+         log << "after E step: K=" << alg.n_clusters() << '\n';
          double const diff((newscore - score) / alg.n_data());
          score = newscore;
          if ((0.0 <= diff) && (diff <= eps)) {
@@ -951,9 +1078,10 @@ namespace etos
             break;
          }
          alg.m_step();
-         if ((n % 50 == 0) && (n != 0)) {
+         log << "afte M step K= " << alg.n_clusters() << '\n';
+         if ((n % 1 == 0) && (n != 0)) {
             log << '\n'
-                << alg.n_clusters() << '\t' << score << '\t' << diff << '\n';
+                << alg.n_clusters() << '\t' << score << '\t' << diff << '\t' << alg.cluster(0).kappa_ << '\n';
          }
          if (diff < 0.0) {
             log << '!' << std::flush;
@@ -974,7 +1102,7 @@ namespace etos
             score = alg.e_step();
             double current_score(std::numeric_limits<double>::max());
             alg.remove_cluster(alg.n_clusters() - 1);
-            log << "REMOVE SMOLLEST CLUSTER " << alg.n_clusters() << '\n';
+            log << "REMOVE SMALLEST CLUSTER " << alg.n_clusters() << '\n';
             for (int n(0);; ++n) {
                double const newscore(alg.e_step());
                double const diff((newscore - current_score) / alg.n_data());
@@ -982,6 +1110,7 @@ namespace etos
                if ((0.0 <= diff) && (diff <= eps)) {
                   log << "\nRESULT "
                       << alg.n_clusters() << '\t' << newscore << '\t' << diff << '\n';
+                  // todo stop after the best solution found, return that one instead
                   break;
                }
                alg.m_step();
@@ -1015,25 +1144,70 @@ namespace etos
 
 int main()
 {
-   static const size_t N = 1000;
-   static const size_t D = 3;
-   std::vector<double> x(N * D);
+   static const size_t N = 9;
+   static const size_t D = 2;
+
+   // define samples
+   std::vector<double> x{
+       -2, 3,
+       2, 5,
+       -1, 7,
+       0, 4,
+       1, 6,
+      // second comp
+       2, -3,
+       -1, -6,
+       1, -4,
+       -2, -7
+   };
+
    etos::robust_vb alg(&x[0], N, D);
+
+   // set the prior
    // alg.load_param();
+   {
+       double kappa = 1e-5;
+       double gamma = 3;
+       double eta = 1e-5;
+       double nu = 1000;
+       double sigma = 1;
+       alg.set_param(kappa, gamma, eta, nu, sigma);
+   }
+
    // alg.load_model();
+   static const int K = 2;
+   std::vector<int> id = {0, 1};
+   std::vector<double> kappa(K, 1e-5);
+   std::vector<double> gamma(K, 3);
+   std::vector<double> eta(K, 1e-5);
+   // todo segfault if xi < 0.5
+   std::vector<double> xi(K, 0.5);
+   auto mu = std::vector<std::vector<double> >{
+      std::vector<double>{-2, 3},
+      std::vector<double>{2, -3}
+   };
+   // unit matrices
+   auto sigma = std::vector<std::vector<double> >{
+      std::vector<double>{1, 0, 1},
+      std::vector<double>{1, 0, 1}
+   };
+
+   // set the starting value of posterior parameters
+   alg.load_model(K, id, kappa, gamma, eta, xi, mu, sigma);
 
    // only one annealing step?
-   double temp0 = 1.0;
-   double dtemp = 0.5;
+   double temp0 = 1;
+   double dtemp = 1;
 
    double eps = 1e-4;
-   bool remove = true;
+   bool remove = false;
 
    double score = classify(alg, eps, temp0, dtemp, std::clog, remove);
+   alg.save_model(std::clog);
    return 0;
 }
 
 
 // Local Variables:
-// compile-command: "g++ -Wall -pedantic -fopenmp etos.cxx -llapack -lblas -o etos"
+// compile-command: "g++ -std=c++11 -Wall -pedantic -fopenmp -g -O0 etos.cxx -llapack -lblas -o etos && ./etos"
 // End:

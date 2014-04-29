@@ -17,7 +17,10 @@ extra_compile_args=["-Wno-unused-but-set-variable",
                     "-Wno-unused-function",
                     "-O3"]
 
-extensions = [ Extension('*', ['pypmc/*/*.pyx' ], extra_compile_args=extra_compile_args)]
+extensions = [Extension('*', ['pypmc/*/*.pyx' ], extra_compile_args=extra_compile_args),
+              Extension('etos', ['pypmc/mix_adapt/etos.cxx'],
+                        extra_compile_args=extra_compile_args + ['-std=c++11'],
+                        libraries= ['lapack', 'blas'])]
 
 setup(
     name=n,
