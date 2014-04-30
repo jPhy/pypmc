@@ -225,6 +225,10 @@ class DeterministicIS(ImportanceSampler):
         self.history.clear()
         self._deltas_targets_evaluated.clear()
         self.proposal_history = []
+        try:
+            self.std_weights.clear()
+        except AttributeError:
+            pass
 
     @_inherit_docstring(ImportanceSampler)
     def _calculate_weights(self, this_weights_samples, this_N):
