@@ -180,6 +180,8 @@ namespace etos
       return score;
    }
 
+   typedef std::function<void (int)> RemoveFunction;
+
    /**
     * Perform m step for components individually and
     * remove a component if its Cholesky decomposition fails.
@@ -190,7 +192,7 @@ namespace etos
     */
    template <typename T, typename X, typename P>
    void
-   exec_m_step(std::vector<T*>& c, X const& x, P const& p, double beta)
+   exec_m_step(std::vector<T*>& c, X const& x, P const& p, double beta, RemoveFunction f)
    {
       for (std::size_t k(0); k < c.size();) {
          if (c[k]->m_step(x, p, beta)) {
@@ -199,8 +201,9 @@ namespace etos
             std::cerr << "Removing component " << k
                       << " due to failed Cholesky factorization of" << std::endl;
             std::cerr << c[k]->sigma_ << std::endl;
-            std::swap(c[k], c.back());
-            c.resize(c.size() - 1);
+            f(k);
+            // std::swap(c[k], c.back());
+            // c.resize(c.size() - 1);
          }
       }
    }
@@ -468,6 +471,12 @@ namespace etos
 
          /// normal covariance
          lmatrix<double> sigma_;
+
+         /**
+          * ctor
+          * @param dim Dimension of sample space.
+          */
+         param_t(size_t dim);
       };
 
       typedef param_t prior_t;
@@ -497,7 +506,7 @@ namespace etos
          /// inverse
          lmatrix<double> inv_;
 
-         /*
+         /**
           * Contribution of this cluster to F.
           * Set to zero if only one cluster remains.
           */
@@ -513,6 +522,9 @@ namespace etos
          bool m_step(embase const& x, prior_t const& prior, double beta);
       };
 
+      /// Combination of prior and posterior parameters for one component
+      typedef std::pair<prior_t, cluster_t> pripos_t;
+
       /**
        * Ctor.
        *
@@ -520,7 +532,20 @@ namespace etos
        * @param num Number of samples.
        * @param dim Dimension of each sample.
        */
-      robust_vb(double const* x, int num, int dim);
+      robust_vb(double const* x, int num, int dim,
+                const std::vector<int> & id,
+                const std::vector<double> & kappa0,
+                const std::vector<double> & kappa,
+                const std::vector<double> & gamma0,
+                const std::vector<double> & gamma,
+                const std::vector<double> & eta0,
+                const std::vector<double> & eta,
+                const std::vector<double> & xi0,
+                const std::vector<double> & xi,
+                const std::vector<std::vector<double>> & mu0,
+                const std::vector<std::vector<double>> & mu,
+                const std::vector<std::vector<double>> & sigma0,
+                const std::vector<std::vector<double>> & sigma);
 
       /**
        * Set prior values, identical for all components.
@@ -568,7 +593,7 @@ namespace etos
 
       void m_step(double beta = 1.0);
 
-      prior_t const& prior() const;
+      prior_t const& prior(int k) const;
       int n_clusters() const;
       cluster_t const& cluster(int k) const;
 
@@ -577,17 +602,36 @@ namespace etos
       double z(int n, int k) const;
 
    private:
+
+      /**
+       * Update storage size to hold n_clusters.
+       * Do nothing if size large enough.
+       */
+      void resize(size_t n_clusters);
+
       // identical prior for every component
-      prior_t prior_;
+      // prior_t prior_;
 
       double sum_lgamma0_;
       double logdet0_;
 
-      // just a data holder?
-      std::vector<cluster_t> cdata_;
+      /**
+       * Hold all the clusters.
+       */
+      // std::vector<cluster_t> cdata_;
 
-      // all parameters defining a cluster
-      std::vector<cluster_t*> clusters_;
+      /**
+       * All active clusters. May contain only a subset of cdata_.
+       * Just pointers into cdata_.
+       */
+      // std::vector<cluster_t*> clusters_;
+
+      /**
+       * Hold prior for every component. Same arrangement of active
+       * and all priors as for the clusters.
+       */
+      std::vector<pripos_t> data_;
+      std::vector<pripos_t *> pripos_;
 
       /**
        * Recomputes score for every component.
@@ -598,46 +642,115 @@ namespace etos
    };
 
    inline robust_vb::prior_t const&
-   robust_vb::prior() const
+   robust_vb::prior(int k) const
    {
-      return prior_;
+      return pripos_[k]->first;
    }
 
    inline int
    robust_vb::n_clusters() const
    {
-      return clusters_.size();
+      return pripos_.size();
    }
 
    inline robust_vb::cluster_t const&
    robust_vb::cluster(int k) const
    {
-      return *clusters_[k];
+      return pripos_[k]->second;
    }
 
    inline int
    robust_vb::id(int k) const
    {
-      return clusters_[k]->id_;
+      return pripos_[k]->second.id_;
    }
 
    inline double
    robust_vb::p(int n, int k) const
    {
-      return std::exp(clusters_[k]->p_[n] - clusters_[k]->p0_);
+      return std::exp(pripos_[k]->second.p_[n] - pripos_[k]->second.p0_);
    }
 
    inline double
    robust_vb::z(int n, int k) const
    {
-      return clusters_[k]->z_[n];
+      return pripos_[k]->second.z_[n];
+   }
+
+   robust_vb(double const* x, int num, int dim,
+             const std::vector<int> & id,
+             const std::vector<double> & kappa0,
+             const std::vector<double> & kappa,
+             const std::vector<double> & gamma0,
+             const std::vector<double> & gamma,
+             const std::vector<double> & eta0,
+             const std::vector<double> & eta,
+             const std::vector<double> & xi0,
+             const std::vector<double> & xi,
+             const std::vector<std::vector<double>> & mu0,
+             const std::vector<std::vector<double>> & mu,
+             const std::vector<std::vector<double>> & sigma0,
+             const std::vector<std::vector<double>> & sigma) :
+      embase(x, num, dim)
+   {
+      // all inputs must be K vectors
+      const size_t K = id.size();
+      assert(K == kappa0.size());
+      assert(K == kappa.size());
+      assert(K == gamma0.size());
+      assert(K == gamma.size());
+      assert(K == eta0.size());
+      assert(K == eta.size());
+      assert(K == xi0.size());
+      assert(K == xi.size());
+      assert(K == mu0.size());
+      assert(K == mu.size());
+      assert(K == sigma0.size());
+      assert(K == sigma.size());
+
+      // create prior
+      for (size_t k = 0; k < K; ++k)
+      {
+         prior_t p(dim);
+         p.kappa_ = kappa0[k];
+         p.gamma_ = gamma0[k];
+         p.eta_ = eta0[k];
+         p.xi0_ = xi0[k];
+         std::copy(mu0[k].begin(), mu0[k].end(), p.mu_.begin());
+
+         // check if matrix is positive definite
+         lmatrix cov(dim);
+         for (size_t i = 0; i < dim; ++i) {
+           for (size_t j = 0; j <= i; ++j) {
+              // lower diagonal matrix stored such that
+              // first element in row at sum of previous elements
+              // + offset: i(i+1)/2 + j
+              cov[i][j] = sigma0[k][i * (i + 1) / 2 + j];
+           }
+         }
+         // copy before Cholesky is done in place
+         p.sigma_ = cov;
+
+         // covariance invalid if Cholesky fails
+         if (cholesky(cov)
+         {
+            std::ostream o;
+            o << "Invalid
+            throw std::runtime_error(
+
+         // std::copy(sigma0[k].begin(), sigma0[k].end(), );
+
+         data_.push_back(pripos_t(
+
+      }
+
    }
 
    robust_vb::robust_vb(double const* x, int num, int dim) :
       embase(x, num, dim)
    {
-      prior_.mu_.resize(dim);
-      prior_.sigma_.resize(dim);
+      // prior_.mu_.resize(dim);
+      // prior_.sigma_.resize(dim);
    }
 
    void
@@ -670,15 +783,23 @@ namespace etos
    }
 
    void
+   robust_vb::resize(size_t n_clusters)
+   {
+      if (n_clusters > cdata_.size()) {
+         cdata_.resize(n_clusters);
+         pdata_.resize(n_clusters);
+      }
+      clusters_.resize(n_clusters);
+      priors_.resize(n_clusters);
+   }
+
+   void
    robust_vb::load_model(size_t n_clusters, const std::vector<int> & id,
          const std::vector<double> & kappa, const std::vector<double> & gamma,
          const std::vector<double> & eta, const std::vector<double> & xi,
          const std::vector<std::vector<double>> & mu, const std::vector<std::vector<double>> & sigma)
    {
-      if (n_clusters > int(cdata_.size())) {
-         cdata_.resize(n_clusters);
-      }
-      clusters_.resize(n_clusters);
+      resize(n_clusters);
 
       // all inputs must be K vectors
       assert(n_clusters == id.size());
@@ -787,7 +908,7 @@ namespace etos
       double score;
       double sum_kappa(0.0);
       for (int k(0); k < n_clusters(); ++k) {
-         sum_kappa += clusters_[k]->kappa_;
+         sum_kappa += pripos_[k]->second.kappa_;
       }
       double const kappa0_dash(beta * prior_.kappa_ - beta + 1.0);
       double const digamma_sum_kappa(digamma(sum_kappa));
@@ -799,16 +920,16 @@ namespace etos
       double const p0(-0.5 * dim() * std::log(PI) - digamma_sum_kappa);
       penalty = penalty0;
       for (int k(0); k < n_clusters(); ++k) {
-         double const penaltyk(clusters_[k]->e_step(*this, prior_, p0, beta,
+         double const penaltyk(pripos_[k]->second.e_step(*this, prior_, p0, beta,
                                                     sum_lgamma0_, logdet0_));
          penalty += penaltyk;
-         double const sum_kappak(sum_kappa - clusters_[k]->kappa_);
+         double const sum_kappak(sum_kappa - pripos_[k]->second.kappa_);
          double const penalty0_dash(
                                     + lgamma(sum_kappak)
                                     - beta * lgamma((n_clusters() - 1) * prior_.kappa_)
                                     - (sum_kappak - (n_clusters() - 1) * kappa0_dash) * digamma(sum_kappak)
                                     );
-         clusters_[k]->score_ = - penaltyk - (penalty0 - penalty0_dash);
+         pripos_[k]->second.score_ = - penaltyk - (penalty0 - penalty0_dash);
       }
       score = calc_z_and_score(clusters_);
       return score - penalty;
@@ -821,10 +942,10 @@ namespace etos
       double min_score(0.0);
       int min_k(-1);
       for (int k(0); k < n_clusters(); ++k) {
-         std::cerr << "Comp. " << k << " has score " << clusters_[k]->score_ << " and "
-                   << clusters_[k]->kappa_ - prior_.kappa_ << " samples." << std::endl;
-         if (clusters_[k]->score_ < min_score) {
-            min_score = clusters_[k]->score_;
+         std::cerr << "Comp. " << k << " has score " << pripos_[k]->second.score_ << " and "
+                   << pripos_[k]->second.kappa_ - prior_.kappa_ << " samples." << std::endl;
+         if (pripos_[k]->second.score_ < min_score) {
+            min_score = pripos_[k]->second.score_;
             min_k = k;
          }
       }
@@ -839,7 +960,7 @@ namespace etos
    void
    robust_vb::m_step(double beta)
    {
-      exec_m_step(clusters_, *this, prior_, beta);
+      exec_m_step(clusters_, *this, prior_, beta, std::bind(&robust_vb::remove_cluster, *this, std::placeholders::_1));
    }
 
    double
