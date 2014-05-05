@@ -22,6 +22,11 @@ Indicator
 
 .. autofunction:: pypmc.tools.indicator.merge_function_with_indicator
 
+Partition
+---------
+
+.. autofunction:: pypmc.tools.partition
+
 Plot
 ----
 

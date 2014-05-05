@@ -6,6 +6,8 @@
 from __future__ import division as _div
 import numpy as _np
 from ..tools._doc import _add_to_docstring
+from ..tools import partition as _part
+from ..density.mixture import create_gaussian_mixture as _mkgauss
 
 _manual_param_n = ''':param n:
 
@@ -187,3 +189,84 @@ def r_group(means, covs, n, critical_r=1.5, indices=None, approx=False):
             groups.append([i])
 
     return groups
+
+@_add_to_docstring(_manual_param_approx)
+def make_r_gaussmix(data, K_g=15, critical_r=2., indices=None, approx=False):
+    '''Use ``data`` from multiple "Iterative Simulations" (e.g. Markov
+    Chains) to form a Gaussian Mixture. This approach refers to the
+    "long patches" in [BC13]_.
+
+    The idea is to group chains according to their R-value as in
+    :py:func:`.r_group` and form ``K_g`` Gaussian Components per chain
+    group. Once the groups are found by :py:func:`.r_group`, the ``data``
+    from each chain group is partitioned into ``K_g`` parts (using
+    :py:func:`pypmc.tools.partition`). For each of these parts a Gaussian
+    with its empirical mean and covariance is created.
+
+    Return a :py:class:`pypmc.density.mixture.MixtureDensity` with
+    :py:class:`pypmc.density.gauss.Gauss` components.
+
+    :param data:
+
+        Iterable of matrix-like arrays; the individual items are interpreted
+        as points from an individual chain.
+
+        .. important::
+            Every chain must bring the same number of points.
+
+    :param K_g:
+
+        Integer; the number of components per chain group.
+
+    :param critical_r:
+
+        Float; the maximum R value a chain group may have.
+
+    :param indices:
+
+        Integer; Iterable of Integers; use R value in these dimensions
+        only. Default is all.
+
+    '''
+    def append_components(means, covs, data, partition):
+        subdata_start = 0
+        subdata_stop  = partition[0]
+        for len_subdata in partition:
+            subdata = data[subdata_start:subdata_stop]
+            means.append( _np.mean(subdata,   axis=0) )
+            covs.append ( _np.cov (subdata, rowvar=0) )
+            subdata_start += len_subdata
+            subdata_stop  += len_subdata
+
+    n = len(data[0])
+    for item in data:
+        assert len(item) == n, 'Every chain must bring the same number of points.'
+
+    chain_groups = r_group([_np.mean(chain_values, axis  =0) for chain_values in data],
+                           [_np.cov (chain_values, rowvar=0) for chain_values in data],
+                           n, critical_r, indices, approx)
+
+    long_patches_means = []
+    long_patches_covs = []
+    for group in chain_groups:
+        # we want K_g components from k_g = len(group) chains
+        k_g = len(group)
+        if K_g >= k_g:
+            # find minimal lexicographic integer partition
+            n = _part(K_g, k_g)
+            for i, chain_index in enumerate(group):
+                # need to partition in n[i] parts
+                data_full_chain = data[chain_index]
+                # find minimal lexicographic integer partition of chain_length into n[i]
+                this_patch_lengths = _part(len(data_full_chain), n[i])
+                append_components(long_patches_means, long_patches_covs, data_full_chain, this_patch_lengths)
+        else:
+            # form one long chain and set k_g = 1
+            k_g = 1
+            # make one large chain
+            data_full_chain = _np.vstack([data[i] for i in group])
+            # need to partition into K_g parts -- > minimal lexicographic integer partition
+            this_patch_lengths = _part(len(data_full_chain), K_g)
+            append_components(long_patches_means, long_patches_covs, data_full_chain, this_patch_lengths)
+
+    return _mkgauss(long_patches_means, long_patches_covs)
