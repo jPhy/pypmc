@@ -12,7 +12,7 @@ import pypmc
 # In this case, it is a bimodal Gaussian
 #
 # Note that the target function "log_target" returns the log of the
-# target function and that the target is not normalized.
+# target function.
 component_weights = np.array([0.3, 0.7])
 
 mean0       = np.array ([ 5.0  , 0.01  ])
