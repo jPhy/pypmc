@@ -1,7 +1,6 @@
 '''Functions associated with the Gelman-Rubin R value [GR92]_.
 
 '''
-# TODO write example: Markov chains --> group by R value
 
 from __future__ import division as _div
 import numpy as _np
