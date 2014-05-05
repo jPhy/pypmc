@@ -17,6 +17,9 @@
  * 02110-1301, USA.
  */
 
+//#include <gsl/gsl_blas.h>
+//#include <gsl/gsl_linalg.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -472,6 +475,9 @@ namespace etos
          /// normal covariance
          lmatrix<double> sigma_;
 
+         /// log of the determinant of sigma_
+         double log_det_;
+
          /**
           * ctor
           * @param dim Dimension of sample space.
@@ -513,6 +519,8 @@ namespace etos
 
          double score_;
 
+         cluster_t(size_t dim);
+
          double d(double const* x, double* work) const;
 
          double e_step(embase const& x,
@@ -532,7 +540,7 @@ namespace etos
        * @param num Number of samples.
        * @param dim Dimension of each sample.
        */
-      robust_vb(double const* x, int num, int dim,
+      robust_vb(double const* x, size_t num, size_t dim,
                 const std::vector<int> & id,
                 const std::vector<double> & kappa0,
                 const std::vector<double> & kappa,
@@ -613,7 +621,7 @@ namespace etos
       // prior_t prior_;
 
       double sum_lgamma0_;
-      double logdet0_;
+//      double logdet0_;
 
       /**
        * Hold all the clusters.
@@ -677,7 +685,7 @@ namespace etos
       return pripos_[k]->second.z_[n];
    }
 
-   robust_vb(double const* x, int num, int dim,
+   robust_vb::robust_vb(double const* x, size_t num, size_t dim,
              const std::vector<int> & id,
              const std::vector<double> & kappa0,
              const std::vector<double> & kappa,
@@ -691,7 +699,8 @@ namespace etos
              const std::vector<std::vector<double>> & mu,
              const std::vector<std::vector<double>> & sigma0,
              const std::vector<std::vector<double>> & sigma) :
-      embase(x, num, dim)
+      embase(x, num, dim),
+      sum_lgamma0_(0)
    {
       // all inputs must be K vectors
       const size_t K = id.size();
@@ -708,18 +717,19 @@ namespace etos
       assert(K == sigma0.size());
       assert(K == sigma.size());
 
-      // create prior
       for (size_t k = 0; k < K; ++k)
       {
+         /* create prior */
+
          prior_t p(dim);
          p.kappa_ = kappa0[k];
          p.gamma_ = gamma0[k];
          p.eta_ = eta0[k];
-         p.xi0_ = xi0[k];
+         p.xi_ = xi0[k];
          std::copy(mu0[k].begin(), mu0[k].end(), p.mu_.begin());
 
          // check if matrix is positive definite
-         lmatrix cov(dim);
+         lmatrix<double> cov(dim);
          for (size_t i = 0; i < dim; ++i) {
            for (size_t j = 0; j <= i; ++j) {
               // lower diagonal matrix stored such that
@@ -732,26 +742,42 @@ namespace etos
          p.sigma_ = cov;
 
          // covariance invalid if Cholesky fails
-         if (cholesky(cov)
+         if (cholesky(cov))
          {
-            std::ostream o;
-            o << "Invalid
-            throw std::runtime_error(
+            std::ostringstream o;
+            o << "Invalid prior covariance for component " << k << std::endl;
+            o << cov << std::endl;
+            throw std::runtime_error(o.str());
+         }
 
-         // std::copy(sigma0[k].begin(), sigma0[k].end(), );
+         // TODO lgamma per component
+//         sum_lgamma0 += lgamma(gamma0[k])
 
-         data_.push_back(pripos_t(
+         // now the matrix contains the lower triangular Cholesky root
+         lmatrix<double> & L = cov;
 
+         // the determinant of a triangular matrix is product of diagonals
+         // remember extra gamma/2 factor
+         // todo check if correct
+         double log_det = 0;
+         for (size_t i = 0; i < dim; ++i)
+         {
+            log_det += std::log(p.gamma_ * L[i][i]);
+         }
+
+         /* create initial value of posterior */
+
+         data_.push_back(pripos_t(p, c));
       }
 
    }
 
-   robust_vb::robust_vb(double const* x, int num, int dim) :
-      embase(x, num, dim)
-   {
-      // prior_.mu_.resize(dim);
-      // prior_.sigma_.resize(dim);
-   }
+//   robust_vb::robust_vb(double const* x, int num, int dim) :
+//      embase(x, num, dim)
+//   {
+//       prior_.mu_.resize(dim);
+//       prior_.sigma_.resize(dim);
+//   }
 
    void
    robust_vb::set_param(double kappa, double gamma, double eta,
@@ -961,6 +987,17 @@ namespace etos
    robust_vb::m_step(double beta)
    {
       exec_m_step(clusters_, *this, prior_, beta, std::bind(&robust_vb::remove_cluster, *this, std::placeholders::_1));
+   }
+
+   robust_vb::clusters_t::cluster_t(size_t dim) :
+         param_t(dim)
+   {
+      c.p_.resize(n_data());
+      c.u_.resize(n_data());
+      c.v_.resize(n_data());
+      c.z_.resize(n_data());
+      c.l_.resize(dim);
+      c.inv_.resize(dim);
    }
 
    double
