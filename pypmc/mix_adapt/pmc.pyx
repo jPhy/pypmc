@@ -9,6 +9,8 @@ import numpy as _np
 from math import exp as _exp
 from copy import deepcopy as _cp
 from ..tools._regularize import regularize
+from pypmc.tools._regularize cimport logsumexp2D
+
 
 from libc.math cimport exp
 cimport numpy as _np
@@ -76,13 +78,14 @@ def gaussian_pmc(samples, density, weights=None, latent=None, rb=True, mincount=
 
     def calculate_rho_rb():
         rho = _np.zeros(( len(samples),len(density.components) ))
+        density.multi_evaluate(samples, individual=rho, components=live_components)
 
         cdef:
             size_t n
             int    k
             double tiny = _np.finfo('d').tiny
             double [:] component_weights = density.weights
-            double [:] log_denominator = density.multi_evaluate(samples, rho, live_components)
+            double [:] log_denominator = logsumexp2D(rho, density.weights)
             double [:,:] memview_rho = rho
 
         for k in live_components:
