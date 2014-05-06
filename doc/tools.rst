@@ -26,6 +26,7 @@ Partition
 ---------
 
 .. autofunction:: pypmc.tools.partition
+.. autofunction:: pypmc.tools.patch_data
 
 Plot
 ----
