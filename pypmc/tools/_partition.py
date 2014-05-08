@@ -3,8 +3,8 @@
 '''
 
 import numpy as _np
-from pypmc.density.gauss import Gauss
-from pypmc.density.mixture import MixtureDensity
+from ..density.gauss import Gauss
+from ..density.mixture import MixtureDensity
 
 def partition(N, k):
     '''Distributre ``N`` into ``k`` partitions such that each partition
@@ -20,7 +20,7 @@ def partition(N, k):
         out[i] += 1
     return out
 
-def patch_data(data, L=100, try_diag=True):
+def patch_data(data, L=100, try_diag=True, verbose=False):
     '''Patch ``data`` (for example Markov chain output) into parts of
     length ``L``. Return a Gaussian mixture where each component gets
     the empirical mean and covariance of one patch.
@@ -45,6 +45,10 @@ def patch_data(data, L=100, try_diag=True):
         that fails as well, the patch is skipped.
         If ``False`` the patch is skipped directly.
 
+    :param verbose:
+
+        Bool; If ``True`` print all status information.
+
     '''
     # patch data into length L patches
     patches = _np.array([data[patch_start:patch_start + L] for patch_start in range(0, len(data), L)])
@@ -55,24 +59,31 @@ def patch_data(data, L=100, try_diag=True):
 
     # form gaussian components
     components = []
+    skipped =[]
     for i, (mean, cov) in enumerate(zip(means, covs)):
         try:
             this_comp = Gauss(mean, cov)
-            if this_comp.det_sigma <= 0:
-                raise _np.linalg.LinAlgError('Negative determinant.')
             components.append(this_comp)
         except _np.linalg.LinAlgError as error1:
-            print("Could not form Gauss from patch %i. Reason: %s" %(i,repr(error1)))
+            if verbose:
+                print("Could not form Gauss from patch %i. Reason: %s" %(i,repr(error1)))
             if try_diag:
                 cov = _np.diag(_np.diag(cov))
                 try:
                     this_comp = Gauss(mean, cov)
-                    if this_comp.det_sigma <= 0:
-                        raise _np.linalg.LinAlgError('Negative determinant.')
                     components.append(this_comp)
-                    print('Diagonal covariance attempt succeeded.')
+                    if verbose:
+                        print('Diagonal covariance attempt succeeded.')
                 except _np.linalg.LinAlgError as error2:
-                    print("Diagonal covariance attempt failed. Reason: %s" %repr(error2))
+                    skipped.append(i)
+                    if verbose:
+                        print("Diagonal covariance attempt failed. Reason: %s" %repr(error2))
+            else: # if not try_diag
+                skipped.append(i)
+
+    # print skipped components if any
+    if skipped:
+        print("WARNING: Could not form Gaussians from: %s" %skipped)
 
     # create and return mixture
     return MixtureDensity(components)
