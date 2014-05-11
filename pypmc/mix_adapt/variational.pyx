@@ -374,13 +374,6 @@ class GaussianInference(object):
 
             This function may delete results obtained by :py:meth:`.update`.
 
-        .. note::
-
-            For good results, it is strongly recommended to NOT initialize
-            ``m`` to values close to the bulk of the target distribution.
-            For all other parameters, consult chapter 10 in [Bis06]_ when
-            considering to modify the defaults.
-
         :param alpha0, alpha:
 
             Float or :math:`K` vector; parameter of the mixing
