@@ -35,6 +35,7 @@ cdef _np.ndarray[double, ndim=2] calculate_rho_rb(_np.ndarray[double, ndim=2] sa
             memview_rho[n, k]  = exp(memview_rho[n, k]) * component_weights[k]
             # + "tiny" --> avoid division by zero
             memview_rho[n, k] /= exp(log_denominator[n]) + tiny
+
     return rho
 
 cdef _np.ndarray[double, ndim=2] calculate_rho_non_rb(_np.ndarray[double, ndim=2] samples,
@@ -48,9 +49,10 @@ cdef _np.ndarray[double, ndim=2] calculate_rho_non_rb(_np.ndarray[double, ndim=2
 def _prepare_pmc_update(_np.ndarray[double, ndim=2] samples, weights, latent, mincount, density, rb, copy):
     """Check arguments of :py:func:`.gaussian_pmc` or
     :py:func:`.sutdent_t_pmc` for contradictions, call the correct
-    function to calculate ``rho`` and (if possible) prune components
-    which have less than ``mincount`` samples.
-    Return ``density``, ``rho``, ``normalized_weights``, ``live_components`` and ``need_renormalize``.
+    function to calculate ``rho`` and (if ``latent`` is not None) prune
+    components which have less than ``mincount`` samples.
+    Return ``density``, ``rho``, ``weight_normalization``,
+    ``live_components`` and ``need_renormalize``.
 
     """
     need_renormalize = False
@@ -63,9 +65,9 @@ def _prepare_pmc_update(_np.ndarray[double, ndim=2] samples, weights, latent, mi
         assert len(weights.shape) == 1, 'Weights must be one-dimensional.'
         assert len(weights) == len(samples), \
             "Number of weights (%s) does not match the number of samples (%s)." % (len(weights), len(samples))
-        normalized_weights = weights / weights.sum()
+        weight_normalization = weights.sum()
     else:
-        normalized_weights = None
+        weight_normalization = float(len(samples))
 
     if latent is None:
         if mincount > 0:
@@ -106,7 +108,7 @@ def _prepare_pmc_update(_np.ndarray[double, ndim=2] samples, weights, latent, mi
                 need_renormalize = True
                 print("Component %i died because of too few (%i) samples." %(k, count[k]))
 
-    return density, rho, normalized_weights, live_components, need_renormalize
+    return density, rho, weight_normalization, live_components, need_renormalize
 
 
 def gaussian_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=None, latent=None, rb=True, mincount=0, copy=True):
@@ -165,7 +167,7 @@ def gaussian_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=
         Otherwise, ``density`` is overwritten by the adapted density.
 
     '''
-    density, rho, normalized_weights, live_components, need_renormalize = \
+    density, rho, weight_normalization, live_components, need_renormalize = \
         _prepare_pmc_update(samples, weights, latent, mincount, density, rb, copy)
 
     # -------------- update equations according to (14) in [Cap+08] --------------
@@ -178,38 +180,38 @@ def gaussian_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=
     if weights is not None:
 
         # new component weights
-        alpha = _np.einsum('n,nk->k', normalized_weights, rho)
-        inv_alpha = 1. / regularize(alpha)
+        alpha  = _np.einsum('n,nk->k', weights, rho)
+        inv_unnormalized_alpha = 1. / regularize(alpha)
+        alpha /= weight_normalization
 
         # new means
-        mu = _np.einsum('n,nk,ni->ki', normalized_weights, rho, samples)
-        mu = _np.einsum('ki,k->ki', mu, inv_alpha)
+        mu = _np.einsum('n,nk,ni->ki', weights, rho, samples)
+        mu = _np.einsum('ki,k->ki', mu, inv_unnormalized_alpha)
 
         # new covars
         for k in live_components:
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
-            _np.einsum('n,n,ni,nj->ij', normalized_weights, rho[:,k], x_minus_mu, x_minus_mu, out=cov[k])
-            cov[k] *= inv_alpha[k]
+            _np.einsum('n,n,ni,nj->ij', weights, rho[:,k], x_minus_mu, x_minus_mu, out=cov[k])
+            cov[k] *= inv_unnormalized_alpha[k]
 
     else: # if weights is None
 
         # new component weights
-        alpha = _np.einsum('nk->k', rho) / len(samples)
-        inv_alpha = 1. / regularize(alpha)
+        alpha  = _np.einsum('nk->k', rho)
+        inv_unnormalized_alpha = 1. / regularize(alpha)
+        alpha /= weight_normalization
 
         # new means
-        mu = _np.einsum('nk,ni->ki', rho, samples) / len(samples)
-        mu = _np.einsum('ki,k->ki', mu, inv_alpha)
+        mu = _np.einsum('nk,ni->ki', rho, samples)
+        mu = _np.einsum('ki,k->ki', mu, inv_unnormalized_alpha)
 
         # new covars
         for k in live_components:
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
             _np.einsum('n,ni,nj->ij', rho[:,k], x_minus_mu, x_minus_mu, out=cov[k])
-            cov[k] *= inv_alpha[k]
-
-        cov /= len(samples)
+            cov[k] *= inv_unnormalized_alpha[k]
 
     # ----------------------------------------------------------------------------
 
@@ -303,67 +305,76 @@ def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights
 
     '''
     # TODO: write test_case
-    # TODO: check build html documentation
     # TODO: dof-bool support --> same linear equation to solve as in etos?
 
-    density, rho, normalized_weights, live_components, need_renormalize = \
+    density, rho, weight_normalization, live_components, need_renormalize = \
         _prepare_pmc_update(samples, weights, latent, mincount, density, rb, copy)
-
+    print 'rho', rho # TODO: remove
     # -------------- update equations according to (14) in [Cap+08] --------------
 
-    # allocate memory for covariances (other memory is allocated on demand)
-    cov = _np.empty(( len(density.components),len(samples[0]),len(samples[0]) ))
-    x_minus_mu = _np.empty((len(samples), len(samples[0])))
+    cdef size_t dim = len(samples[0]), N = len(samples), K = len(density)
 
-    # calculate gamma
+    # allocate memory for covariances (other memory is allocated on demand)
+    cov = _np.empty( (K,dim,dim) )
+    x_minus_mu = _np.empty( (N,dim) )
+
+    # predefine variables for calculation of gamma
     cdef:
         size_t n
-        int    k, dim = len(samples[0])
+        int    k
         double double_dim = dim
         double old_nu_k
         _np.ndarray[double, ndim=1] x_minus_mu_n_k = x_minus_mu[0]
-        double [:] old_mu_k = _np.empty(dim)
-        double [:,:] old_inv_sigma_k = cov[0] # can use cov buffer as temporary variable
-        double [:,:] gamma = _np.empty((len(samples), len(density.components)))
+        _np.ndarray[double, ndim=1] old_mu_k = _np.empty(dim)
+        _np.ndarray[double, ndim=2] old_inv_sigma_k = cov[0] # can use cov buffer as temporary variable
+        double [:,:] gamma = _np.empty( (N,K) )
         double [:,:] samples_memview = samples
 
+    # calculate gamma
     for k in live_components:
-        old_nu_k = density.components[k].nu
+        old_nu_k = density.components[k].dof
+        print 'old_nu_k', old_nu_k # TODO: remove
+        print density.components[k].mu # TODO: remove
         old_mu_k[:] = density.components[k].mu
+        print old_mu_k # TODO: remove
         old_inv_sigma_k[:] = density.components[k].inv_sigma
-        for n in range(dim):
+        for n in range(N):
             x_minus_mu_n_k[:]  = samples_memview[n]
             x_minus_mu_n_k    -= old_mu_k
             gamma[n,k] = (old_nu_k + double_dim) / (old_nu_k + bilinear_sym(old_inv_sigma_k, x_minus_mu_n_k) )
-
+            print 'bilinear_sym', n, k, ':' , bilinear_sym(old_inv_sigma_k, x_minus_mu_n_k) # TODO: remove
+    print 'gamma', _np.array(gamma) # TODO: remove
+    print 'double_dim', double_dim # TODO: remove
     if weights is not None:
 
         # new component weights
-        alpha = _np.einsum('n,nk->k', normalized_weights, rho)
-        inv_alpha = 1. / regularize(alpha)
-
+        alpha  = _np.einsum('n,nk->k', weights, rho)
+        inv_unnormalized_alpha = 1. / regularize(alpha)
+        alpha /= weight_normalization
+        print 'alpha', alpha # TODO: remove
         # new means
-        mu = _np.einsum('n,nk,nk,ni->ki', normalized_weights, rho, gamma, samples)
-        mu_normalization = _np.einsum('n,nk,nk->k', normalized_weights, rho, gamma)
+        mu = _np.einsum('n,nk,nk,ni->ki', weights, rho, gamma, samples)
+        mu_normalization = _np.einsum('n,nk,nk->k', weights, rho, gamma)
         mu_normalization = 1. / regularize(mu_normalization)
         mu = _np.einsum('ki,k->ki', mu, mu_normalization)
-
+        print 'mu', mu # TODO: remove
         # new covars
         for k in live_components:
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
-            _np.einsum('n,n,n,ni,nj->ij', normalized_weights, rho[:,k], gamma[:,k], x_minus_mu, x_minus_mu, out=cov[k])
-            cov[k] *= inv_alpha[k]
-
+            _np.einsum('n,n,n,ni,nj->ij', weights, rho[:,k], gamma[:,k], x_minus_mu, x_minus_mu, out=cov[k])
+            cov[k] *= inv_unnormalized_alpha[k]
+        print _np.array(cov) # TODO: remove
     else: # if weights is None
 
         # new component weights
-        alpha = _np.einsum('nk->k', rho) / len(samples)
-        inv_alpha = 1. / regularize(alpha)
+        alpha  = _np.einsum('nk->k', rho)
+        inv_unnormalized_alpha = 1. / regularize(alpha)
+        alpha /= weight_normalization
 
         # new means
-        mu = _np.einsum('nk,nk,ni->ki', rho, gamma, samples) / len(samples)
-        mu_normalization = _np.einsum('nk,nk->k', rho, gamma) / len(samples)
+        mu = _np.einsum('nk,nk,ni->ki', rho, gamma, samples)
+        mu_normalization = _np.einsum('nk,nk->k', rho, gamma)
         mu_normalization = 1. / regularize(mu_normalization)
         mu = _np.einsum('ki,k->ki', mu, mu_normalization)
 
@@ -372,9 +383,7 @@ def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
             _np.einsum('n,n,ni,nj->ij', rho[:,k], gamma[:,k], x_minus_mu, x_minus_mu, out=cov[k])
-            cov[k] *= inv_alpha[k]
-
-        cov /= len(samples)
+            cov[k] *= inv_unnormalized_alpha[k]
 
     if dof:
         # TODO: insert update equation for degrees of freedom here

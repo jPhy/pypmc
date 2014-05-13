@@ -252,3 +252,5 @@ def recover_gaussian_mixture(mixture):
         covs [i] = c.sigma
 
     return means, covs, weights
+
+# TODO: write create and recover functions for student t
