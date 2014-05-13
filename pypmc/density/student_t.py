@@ -22,6 +22,7 @@ class LocalStudentT(LocalGauss):
 
     def __init__(self, sigma, dof):
         self.symmetric = True
+        assert dof > 0., "Degree of freedom (``dof``) must be greater than zero (got %g)." %dof
         self.dof       = dof
         self.update(sigma)
 

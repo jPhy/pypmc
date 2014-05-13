@@ -24,6 +24,11 @@ class TestLocalStudentT(unittest.TestCase):
         print('"StudentT" needs .LocalGauss.')
         print('When this test fails, first make sure that .LocalGauss works.')
 
+    def test_bad_dof(self):
+        expected_error_msg = ".*dof.*must.*((larger)|(greater)).*(0|(zero))"
+        self.assertRaisesRegexp(AssertionError, expected_error_msg, LocalStudentT, offdiag_sigma,  0.0)
+        self.assertRaisesRegexp(AssertionError, expected_error_msg, LocalStudentT, offdiag_sigma, -1.1)
+
     def test_badCovarianceInput(self):
         self.assertRaises(np.linalg.LinAlgError, lambda: LocalStudentT(singular_sigma, 10) )
         self.assertRaises(np.linalg.LinAlgError, lambda: LocalStudentT(asymmetric_sigma,10) )
