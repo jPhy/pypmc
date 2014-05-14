@@ -8,11 +8,13 @@ from ..density.student_t import StudentT
 from ..density.mixture import MixtureDensity
 from ..tools._regularize import regularize
 from copy import deepcopy as _cp
+from scipy.special import digamma as _psi
+from scipy.optimize import brentq as _find_root
 import numpy as _np
 
 from pypmc.tools._regularize cimport logsumexp2D
 from pypmc.tools._linalg cimport bilinear_sym
-from libc.math cimport exp
+from libc.math cimport exp, log
 cimport numpy as _np
 
 
@@ -112,7 +114,10 @@ def _prepare_pmc_update(_np.ndarray[double, ndim=2] samples, weights, latent, mi
 
 
 def gaussian_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=None, latent=None, rb=True, mincount=0, copy=True):
-    '''Adapt a Gaussian mixture ``density`` using the (M-)PMC algorithm
+    '''gaussian_pmc(samples, density, weights=None, latent=None, rb=True,
+    mincount=0, copy=True)
+
+    Adapt a Gaussian mixture ``density`` using the (M-)PMC algorithm
     according to [Cap+08]_.
 
     :param samples:
@@ -237,9 +242,34 @@ def gaussian_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=
 
     return density
 
-def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=None, latent=None, rb=True, dof=True, mincount=0, copy=True):
-    '''Adapt a Student t mixture ``density`` using the (M-)PMC algorithm
-    according to [Cap+08]_.
+cdef class _DOFCondition(object):
+    '''Implements the first order condition for the degree of freedom of
+    a StudentT mixture: The member function :py:meth:`.ccall` must
+    evalutate to zero. This means, a root finder shoul be run on
+    :py:meth:`.ccall`.
+
+    .. seealso::
+        equation (16) in [HOD12]_
+
+    :param const:
+
+        Double; the equation's part which does not depend on ``nu`` and
+        thus only needs to be calculated once in advance
+
+    '''
+    cdef double const
+    def __cinit__(self, double const):
+        self.const = const
+    def __call__ (self, double nu):
+        return self.const + log(.5 * nu) - _psi(.5 * nu)
+
+def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights=None,
+                  latent=None, rb=True, dof=100, mindof=1e-5, maxdof=1e3, mincount=0, copy=True):
+    '''student_t_pmc(samples, density, weights=None, latent=None, rb=True,
+    dof=100, mindof=1e-5, maxdof=1e3, mincount=0, copy=True)
+
+    Adapt a Student t mixture ``density`` using the (M-)PMC algorithm
+    according to [Cap+08]_ and [HOD12]_.
 
     :param samples:
 
@@ -272,14 +302,21 @@ def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights
 
     :param dof:
 
-        Bool; If ``False``, the Student t's degrees of freedom are not
-        updated.
+        Integer; If ``0``, the Student t's degrees of freedom are not updated,
+        otherwise an iterative algorithm is run for at most ``dof`` steps.
 
         .. note::
 
             There is no closed form solution for the optimal degree of
-            freedom. If ``dof`` is ``True``, ``len(density)`` first order
+            freedom. If ``dof`` is not ``0``, ``len(density)`` first order
             equations must be solved numerically which can take a while.
+
+    :param mindof, maxdof:
+
+        Float; Degree of freedom adaptation is a one dimentional root
+        finding problem. The numerical root finder used in this function
+        (:py:func:`scipy.optimize.brentq`) needs an interval where to
+        search.
 
     :param mincount:
 
@@ -304,12 +341,9 @@ def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights
         Otherwise, ``density`` is overwritten by the adapted density.
 
     '''
-    # TODO: write test_case
-    # TODO: dof-bool support --> same linear equation to solve as in etos?
-
     density, rho, weight_normalization, live_components, need_renormalize = \
         _prepare_pmc_update(samples, weights, latent, mincount, density, rb, copy)
-    print 'rho', rho # TODO: remove
+
     # -------------- update equations according to (14) in [Cap+08] --------------
 
     cdef size_t dim = len(samples[0]), N = len(samples), K = len(density)
@@ -326,45 +360,40 @@ def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights
         double old_nu_k
         _np.ndarray[double, ndim=1] x_minus_mu_n_k = x_minus_mu[0]
         _np.ndarray[double, ndim=1] old_mu_k = _np.empty(dim)
-        _np.ndarray[double, ndim=2] old_inv_sigma_k = cov[0] # can use cov buffer as temporary variable
+        _np.ndarray[double, ndim=2] old_inv_sigma_k = _np.empty( (dim,dim) )
         double [:,:] gamma = _np.empty( (N,K) )
         double [:,:] samples_memview = samples
 
     # calculate gamma
     for k in live_components:
         old_nu_k = density.components[k].dof
-        print 'old_nu_k', old_nu_k # TODO: remove
-        print density.components[k].mu # TODO: remove
         old_mu_k[:] = density.components[k].mu
-        print old_mu_k # TODO: remove
         old_inv_sigma_k[:] = density.components[k].inv_sigma
         for n in range(N):
             x_minus_mu_n_k[:]  = samples_memview[n]
             x_minus_mu_n_k    -= old_mu_k
             gamma[n,k] = (old_nu_k + double_dim) / (old_nu_k + bilinear_sym(old_inv_sigma_k, x_minus_mu_n_k) )
-            print 'bilinear_sym', n, k, ':' , bilinear_sym(old_inv_sigma_k, x_minus_mu_n_k) # TODO: remove
-    print 'gamma', _np.array(gamma) # TODO: remove
-    print 'double_dim', double_dim # TODO: remove
+
     if weights is not None:
 
         # new component weights
         alpha  = _np.einsum('n,nk->k', weights, rho)
         inv_unnormalized_alpha = 1. / regularize(alpha)
         alpha /= weight_normalization
-        print 'alpha', alpha # TODO: remove
+
         # new means
         mu = _np.einsum('n,nk,nk,ni->ki', weights, rho, gamma, samples)
         mu_normalization = _np.einsum('n,nk,nk->k', weights, rho, gamma)
         mu_normalization = 1. / regularize(mu_normalization)
         mu = _np.einsum('ki,k->ki', mu, mu_normalization)
-        print 'mu', mu # TODO: remove
+
         # new covars
         for k in live_components:
             x_minus_mu[:] = samples
             x_minus_mu -= mu[k]
             _np.einsum('n,n,n,ni,nj->ij', weights, rho[:,k], gamma[:,k], x_minus_mu, x_minus_mu, out=cov[k])
             cov[k] *= inv_unnormalized_alpha[k]
-        print _np.array(cov) # TODO: remove
+
     else: # if weights is None
 
         # new component weights
@@ -385,10 +414,67 @@ def student_t_pmc(_np.ndarray[double, ndim=2] samples not None, density, weights
             _np.einsum('n,n,ni,nj->ij', rho[:,k], gamma[:,k], x_minus_mu, x_minus_mu, out=cov[k])
             cov[k] *= inv_unnormalized_alpha[k]
 
+    cdef double nu_condition_const, bilinear
+
     if dof:
-        # TODO: insert update equation for degrees of freedom here
-        raise NotImplementedError('DOF-update is not implemented yet')
-    else:
+
+        new_dof = [-1 for k in range(K)]
+
+        # calculate xi_n_k + delta_n_k from [HOD12] --> can use ``gamma`` buffer because it is not needed any more
+        for k in live_components:
+
+            old_nu_k = density.components[k].dof
+            old_mu_k[:] = density.components[k].mu
+            old_inv_sigma_k[:] = density.components[k].inv_sigma
+
+            for n in range(N):
+                x_minus_mu_n_k[:]  = samples_memview[n]
+                x_minus_mu_n_k    -= old_mu_k
+                bilinear           = bilinear_sym(old_inv_sigma_k, x_minus_mu_n_k)
+
+                # xi
+                gamma[n,k]  =  log(.5 * (bilinear   + old_nu_k) )
+                gamma[n,k] -= _psi(.5 * (double_dim + old_nu_k) )
+                gamma[n,k] *= rho[n,k]
+                gamma[n,k] += (1. - rho[n,k]) * ( log(.5 * old_nu_k) - _psi(.5 * old_nu_k) )
+
+                # delta
+                gamma[n,k] += rho[n,k] * (double_dim + old_nu_k) / (bilinear + old_nu_k)
+                gamma[n,k] += (1. - rho[n,k])
+
+            # gamma should now be xi + delta
+
+        for k in live_components:
+
+            # calculate constant part of condition for nu
+            if weights is None:
+                nu_condition_const  = _np.einsum('n->', gamma[:,k])
+            else:
+                nu_condition_const  = _np.einsum('n,n->', gamma[:,k], weights)
+            nu_condition_const /= weight_normalization
+            nu_condition_const  = 1. - nu_condition_const
+            nu_condition = _DOFCondition(nu_condition_const)
+
+            # solve the first-order condition
+            try:
+                new_dof[k] = _find_root(nu_condition, mindof, maxdof, maxiter=dof)
+            except RuntimeError: # occurs if not converged
+                print("WARNING: ``dof`` solver for component %i did not converge." %k)
+                new_dof[k] = density.components[k].dof
+            except ValueError as error:
+                # check if nu_condition has the same sign at mindof and maxdof
+                # Note: nu_condition is a decreasing function
+                #   - if nu_condition(mindof) < 0. we know the root is < mindof --> set it mindof
+                #   - if nu_condition(maxdof) > 0. we know the root is > maxdof --> set it maxdof
+                if nu_condition(mindof) < 0.:
+                    new_dof[k] = mindof
+                elif nu_condition(maxdof) > 0.:
+                    new_dof[k] = maxdof
+                else:
+                    raise RuntimeError('``dof`` adaptation for component %i raised an error.'%k, error)
+
+    else: # if not dof
+
         new_dof = [c.dof for c in density.components]
 
     # ----------------------------------------------------------------------------
