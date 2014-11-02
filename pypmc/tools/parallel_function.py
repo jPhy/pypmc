@@ -8,7 +8,7 @@ import numpy as _np
 class _StopWorkerMainloop(object):
     pass
 
-class ParallelFunction(object): # TODO: usage example
+class ParallelFunction(object):
     '''A callable wich is executed in multiple processes. This abstract
     base class provides an Interface for easier parallel programming.
     The user should derive from this class and override the method
