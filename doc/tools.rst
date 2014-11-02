@@ -29,6 +29,13 @@ Parallel sampler
 	:exclude-members: MPISampler
 .. autoclass::  pypmc.tools.parallel_sampler.MPISampler(sampler_type, comm=MPI.COMM_WORLD, mpi_tag=0, *args, **kwargs)
 
+Parallel function
+-----------------
+
+.. automodule:: pypmc.tools.parallel_function
+	:exclude-members: ParallelFunction
+.. autoclass::  pypmc.tools.parallel_function.ParallelFunction(parallel_steps=1, comm=MPI.COMM_WORLD)
+
 Partition
 ---------
 
