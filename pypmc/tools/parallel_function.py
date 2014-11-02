@@ -22,6 +22,27 @@ class ParallelFunction(object):
         ``mpi4py`` communicator; the communicator to be used for internal
         communication.
 
+    Usage:
+    Subclass this class and overwrite the member methods ``compute``
+    and, if desired, ``combine``. By default, ``compute`` and ``combine``
+    are called once with argument ``step=0``. If your calculation needs
+    intermediate communication, override the member variable ``steps``.
+    Then ``compute`` and ``combine`` are called ``steps`` times.
+    The ``compute`` and ``combine`` outputs are passed as arguments
+    ``worker_output`` and ``worker_input``. If you overwrite the constructor
+    ``__init__``, include the  call ``ParallelFunction(self, comm)``.
+    Then instanciate your subclass of ``ParallelFunction``. Special
+    set up and tear down is needed to use the ``ParallelFunction``. For
+    convenience, this is done in the member method :py:meth:`.use_in`.
+    Inside the ``function`` passed to :py:meth:`.use_in`, your instance
+    is callable as ``instance(x)`` where ``x`` and ``step=0`` are passed
+    to :py:meth:`.compute`. The return value of :py:meth:`.compute` and
+    ``step=0`` are then passed to :py:meth:`.combine`. If you override
+    the member variable ``steps``, the output of :py:meth:`.combine` is
+    passed back to :py:meth:`.compute` but now with ``step=1``.
+    :py:meth:`.compute` and :py:meth:`.combine` are iterated for ``steps``
+    times. Default: ``steps=1``
+
     '''
     steps = 1
 

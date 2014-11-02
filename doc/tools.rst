@@ -34,7 +34,7 @@ Parallel function
 
 .. automodule:: pypmc.tools.parallel_function
 	:exclude-members: ParallelFunction
-.. autoclass::  pypmc.tools.parallel_function.ParallelFunction(parallel_steps=1, comm=MPI.COMM_WORLD)
+.. autoclass::  pypmc.tools.parallel_function.ParallelFunction(comm=MPI.COMM_WORLD)
 
 Partition
 ---------
